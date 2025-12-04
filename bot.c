@@ -16,11 +16,62 @@
 #define API_KEY         "AIzaSyArf2mVDp-YokaIyDaoHw4w07cxmvtnEq4"
 #define GEMINI_URL      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 #define OWM_KEY         "195af9ab44c1cc8d12b9c800a3867078"
+#define LOG_FILE        "bot_activity.log"
+
+// Colors
+#define C_RESET   "\033[0m"
+#define C_RED     "\033[1;31m"
+#define C_GREEN   "\033[1;32m"
+#define C_YELLOW  "\033[1;33m"
+#define C_BLUE    "\033[1;34m"
+#define C_MAGENTA "\033[1;35m"
+#define C_CYAN    "\033[1;36m"
+#define C_WHITE   "\033[1;37m"
 
 struct msgbuf {
     long mtype;
     char mtext[MAX_TEXT];
 };
+
+// STATISTICS
+typedef struct {
+    int total_requests;
+    int system_info_count;
+    int weather_count;
+    int summarize_count;
+    time_t start_time;
+} BotStats;
+
+BotStats stats = {0};
+
+// LOGGING FUNCTION
+void log_activity(const char *event, const char *details) {
+    FILE *log = fopen(LOG_FILE, "a");
+    if (!log) return;
+    
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    fprintf(log, "[%04d-%02d-%02d %02d:%02d:%02d] %s: %s\n",
+            t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+            t->tm_hour, t->tm_min, t->tm_sec,
+            event, details);
+    fclose(log);
+}
+
+// BANNER
+void print_bot_banner() {
+    printf(C_CYAN);
+    printf("\n");
+    printf("██████╗  ██████╗ ███████╗    ██████╗  ██████╗ ████████╗\n");
+    printf("██╔══██╗██╔════╝██╔════╝    ██╔══██╗██╔════╝╚══██╔══╝\n");
+    printf("██████╔╝██║     ██║         ██████╔╝██║        ██║   \n");
+    printf("██╔══██╗██║     ██║         ██╔══██╗██║        ██║   \n");
+    printf("██║  ██║╚██████╗╚███████╗    ██║  ██║╚██████╗   ██║   \n");
+    printf("╚═╝  ╚═╝ ╚═════╝ ╚══════╝    ╚═╝  ╚═╝ ╚═════╝   ╚═╝   \n");
+    printf(C_YELLOW "        IMPLEMENT AND DEMO FOR SHARED MESSAGE QUEUES IN IPC\n" C_RESET);
+    printf(C_MAGENTA "          LETS CHECK IT !\n" C_RESET);
+    printf("\n");
+}
 
 // TỰ ĐỘNG TẠO KEYFILE
 void ensure_keyfile() {
@@ -67,18 +118,21 @@ void get_system_info(char *response) {
     get_top_processes(top, sizeof(top));
 
     snprintf(response, MAX_TEXT,
-        "HỆ THỐNG\n"
-        "OS: %s %s\n"
-        "CPU Load: %d%%\n"
-        "RAM: %ld/%ld MB (%.1f%%)\n"
-        "Uptime: %dd %dh %dm\n"
-        "Host: %s\n\n"
+        "╭─────────────────────────────────────────╮\n"
+        "│       🖥️  SYSTEM INFORMATION       │\n"
+        "├─────────────────────────────────────────┤\n"
+        "│ OS:       %s %s\n"
+        "│ Hostname: %s\n"
+        "│ CPU Load: %d%%\n"
+        "│ RAM:      %ld/%ld MB (%.1f%% used)\n"
+        "│ Uptime:   %dd %dh %dm\n"
+        "╰─────────────────────────────────────────╯\n\n"
         "%s",
         un.sysname, un.release,
+        un.nodename,
         cpu_load,
         total_ram - free_ram, total_ram, ((double)(total_ram - free_ram)/total_ram)*100,
         days, hours, mins,
-        un.nodename,
         top
     );
 }
@@ -158,38 +212,61 @@ char* read_file(const char *path, size_t *sz) {
 
 // MAIN
 int main() {
+    print_bot_banner();
+    
     ensure_keyfile();
     key_t key = ftok("keyfile", 'a');
     int msgid = msgget(key, IPC_CREAT | 0666);
-    if (msgid == -1) { perror("msgget"); exit(1); }
+    if (msgid == -1) { 
+        printf(C_RED "[✗] msgget failed!\n" C_RESET);
+        perror("msgget"); 
+        exit(1); 
+    }
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     struct msgbuf msg;
     srand(time(NULL));
+    
+    stats.start_time = time(NULL);
+    log_activity("BOT_START", "IPC Bot initialized successfully");
 
-    printf("\033[1;32mIPC SmartBot đang chạy... (Queue ID: %d)\033[0m\n", msgid);
-    printf("Cơ chế: User gửi mtype=1 → Bot xử lý → Gửi mtype=2\n");
+    printf(C_GREEN "╔═══════════════════════════════════════════════════════╗\n" C_RESET);
+    printf(C_GREEN "║" C_WHITE "  Status:" C_GREEN " ONLINE                                     " C_GREEN "║\n" C_RESET);
+    printf(C_GREEN "║" C_WHITE "  Queue ID:" C_CYAN " %d                                      " C_GREEN "║\n" C_RESET, msgid);
+    printf(C_GREEN "║" C_WHITE "  Log file:" C_YELLOW " %s                           " C_GREEN "║\n" C_RESET, LOG_FILE);
+    printf(C_GREEN "║" C_WHITE "  Protocol:" C_MAGENTA " User(mtype=1) → Bot → User(mtype=2)  " C_GREEN "║\n" C_RESET);
+    printf(C_GREEN "╚═══════════════════════════════════════════════════════╝\n" C_RESET);
+    printf(C_CYAN "\n▶️ Waiting for requests...\n\n" C_RESET);
 
     while (1) {
         if (msgrcv(msgid, &msg, sizeof(msg.mtext), 1, 0) == -1) continue;
 
         char *cmd = msg.mtext;
         char response[MAX_TEXT] = "";
+        stats.total_requests++;
 
-        printf("\n\033[1;34m[IPC] Nhận từ User: '%s'\033[0m\n", cmd);
+        time_t now = time(NULL);
+        struct tm *t = localtime(&now);
+        printf(C_BLUE "\n[↓ %02d:%02d:%02d] Request #%d: '%s'\n" C_RESET, 
+               t->tm_hour, t->tm_min, t->tm_sec, stats.total_requests, cmd);
+        log_activity("REQUEST", cmd);
 
         if (strcmp(cmd, "exit") == 0) {
-            strcpy(response, "Tạm biệt! Bot đã thoát.");
+            strcpy(response, "Goodbye! Bot shutting down...");
+            log_activity("EXIT", "User requested shutdown");
         }
         else if (strcmp(cmd, "get_system_info") == 0) {
             get_system_info(response);
-            printf("[IPC] Xử lý: get_system_info + top processes\n");
+            stats.system_info_count++;
+            printf(C_GREEN "[✓] Processed: get_system_info\n" C_RESET);
+            log_activity("SYSTEM_INFO", "Generated system report");
         }
         else if (strstr(cmd, "get_weather:") == cmd) {
             char city[256] = "";
             strcpy(city, cmd + 12);
             if (strlen(city) == 0) strcpy(city, "Turan");
 
+            printf(C_YELLOW "[~] Fetching weather for: %s\n" C_RESET, city);
             char url[512];
             char *enc = curl_easy_escape(NULL, city, 0);
             snprintf(url, sizeof(url), "http://api.openweathermap.org/data/2.5/weather?q=%s&appid=%s&units=metric", enc, OWM_KEY);
@@ -211,32 +288,61 @@ int main() {
                 float temp; sscanf(t + 7, "%f", &temp);
                 char desc[100]; char *e = strchr(d + 15, '"');
                 strncpy(desc, d + 15, e - (d + 15)); desc[e - (d + 15)] = '\0';
-                snprintf(response, MAX_TEXT, "Thành phố: %s\nNhiệt độ: %.1f°C\nMô tả: %s", city, temp, desc);
+                snprintf(response, MAX_TEXT, 
+                    "╭────────────────────────────────────╮\n"
+                    "│    🌤️  WEATHER FORECAST       │\n"
+                    "├────────────────────────────────────┤\n"
+                    "│ Location:    %s\n"
+                    "│ Temperature: %.1f°C\n"
+                    "│ Condition:   %s\n"
+                    "╰────────────────────────────────────╯",
+                    city, temp, desc);
+                stats.weather_count++;
+                printf(C_GREEN "[✓] Weather data retrieved\n" C_RESET);
+                log_activity("WEATHER", city);
             } else {
-                snprintf(response, MAX_TEXT, "Không tìm thấy '%s'", city);
+                snprintf(response, MAX_TEXT, "⚠️  City not found: '%s'", city);
+                printf(C_RED "[✗] City not found\n" C_RESET);
+                log_activity("WEATHER_FAIL", city);
             }
             free(api);
-            printf("[IPC] Xử lý: get_weather:%s\n", city);
         }
         else if (strstr(cmd, "summarize_file:") == cmd) {
             char *path = cmd + 15;
             if (strlen(path) == 0) {
-                strcpy(response, "Lỗi: Chưa nhập đường dẫn file.");
+                strcpy(response, "⚠️  Error: No file path provided.");
+                printf(C_RED "[✗] No file path\n" C_RESET);
             } else {
+                printf(C_YELLOW "[~] Reading file: %s\n" C_RESET, path);
                 size_t sz;
                 char *content = read_file(path, &sz);
                 if (!content) {
-                    snprintf(response, MAX_TEXT, "Lỗi: Không mở được file '%s'", path);
+                    snprintf(response, MAX_TEXT, "⚠️  Error: Cannot open file '%s'", path);
+                    printf(C_RED "[✗] File not found or too large\n" C_RESET);
+                    log_activity("SUMMARIZE_FAIL", path);
                 } else {
+                    printf(C_MAGENTA "[~] Calling Gemini AI...\n" C_RESET);
                     char *summary = call_gemini(content);
-                    snprintf(response, MAX_TEXT, "Tóm tắt '%s':\n%s", path, summary);
+                    snprintf(response, MAX_TEXT, 
+                        "╭──────────────────────────────────────────╮\n"
+                        "│     🤖 AI SUMMARY (Gemini 2.0)        │\n"
+                        "├──────────────────────────────────────────┤\n"
+                        "│ File: %s\n"
+                        "├──────────────────────────────────────────┤\n"
+                        "%s\n"
+                        "╰──────────────────────────────────────────╯",
+                        path, summary);
                     free(content); free(summary);
-                    printf("[IPC] Xử lý: summarize_file:%s\n", path);
+                    stats.summarize_count++;
+                    printf(C_GREEN "[✓] Summary generated successfully\n" C_RESET);
+                    log_activity("SUMMARIZE", path);
                 }
             }
         }
         else {
-            strcpy(response, "Lệnh không hợp lệ.");
+            strcpy(response, "⚠️  Unknown command.");
+            printf(C_RED "[✗] Invalid command\n" C_RESET);
+            log_activity("ERROR", "Unknown command");
         }
 
         msg.mtype = 2;
@@ -244,13 +350,33 @@ int main() {
         msg.mtext[MAX_TEXT - 1] = '\0';
         msgsnd(msgid, &msg, strlen(msg.mtext) + 1, 0);
 
-        printf("\033[1;32m[IPC] Gửi phản hồi: %d ký tự\033[0m\n", (int)strlen(response));
+        printf(C_GREEN "[↑] Sent response (%d chars)\n" C_RESET, (int)strlen(response));
+        log_activity("RESPONSE", "Sent back to user");
 
-        if (strstr(response, "Tạm biệt") != NULL) break;
+        if (strstr(response, "shutting down") != NULL) break;
     }
+
+    // STATISTICS SUMMARY
+    time_t runtime = time(NULL) - stats.start_time;
+    printf("\n" C_YELLOW);
+    printf("╔═══════════════════════════════════════════════════════╗\n");
+    printf("║" C_CYAN "               SESSION STATISTICS                    " C_YELLOW "║\n");
+    printf("╠═══════════════════════════════════════════════════════╣\n");
+    printf("║" C_WHITE "  Total Requests:     %4d                        " C_YELLOW "║\n" C_RESET, stats.total_requests);
+    printf(C_YELLOW "║" C_WHITE "  System Info:        %4d                        " C_YELLOW "║\n" C_RESET, stats.system_info_count);
+    printf(C_YELLOW "║" C_WHITE "  Weather Queries:    %4d                        " C_YELLOW "║\n" C_RESET, stats.weather_count);
+    printf(C_YELLOW "║" C_WHITE "  File Summaries:     %4d                        " C_YELLOW "║\n" C_RESET, stats.summarize_count);
+    printf(C_YELLOW "║" C_WHITE "  Runtime:            %ldm %lds                     " C_YELLOW "║\n" C_RESET, runtime/60, runtime%60);
+    printf(C_YELLOW "╚═══════════════════════════════════════════════════════╝\n" C_RESET);
+
+    char stats_msg[256];
+    snprintf(stats_msg, sizeof(stats_msg), "Total: %d | System: %d | Weather: %d | Summary: %d",
+             stats.total_requests, stats.system_info_count, 
+             stats.weather_count, stats.summarize_count);
+    log_activity("BOT_STOP", stats_msg);
 
     msgctl(msgid, IPC_RMID, NULL);
     curl_global_cleanup();
-    printf("\033[1;31mBot đã dọn dẹp và thoát.\033[0m\n");
+    printf(C_RED "\n✗ Bot shutdown complete.\n" C_RESET);
     return 0;
 }
